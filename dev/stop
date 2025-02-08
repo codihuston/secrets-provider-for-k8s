@@ -1,6 +1,8 @@
 #!/bin/bash
 
 main() {
+  rm -f conf/tls/*.crt
+  rm -f conf/tls/*.key
   docker compose down -v
 }
 

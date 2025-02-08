@@ -1,0 +1,26 @@
+#!/bin/bash -ex
+
+main() {  
+  CONJUR_ACCOUNT=cucumber
+  RESOURCE_KIND=host
+  ROLE_ID=test-app
+
+  API_KEY=$(
+    docker compose exec -e CONJUR_DATA_KEY -T conjur \
+      conjurctl role retrieve-key $CONJUR_ACCOUNT:$RESOURCE_KIND:$ROLE_ID | tr -d '\r'
+  )
+
+  API_KEY=$(docker compose exec "conjur" curl \
+    --insecure \
+    -X PUT "https://proxy/authn/$CONJUR_ACCOUNT/api_key?role=$RESOURCE_KIND:$ROLE_ID" \
+    -u "host/$ROLE_ID:$API_KEY"
+  )
+
+  docker compose exec secrets-provider /bin/sh -c "
+    mkdir -p /var/run/conjur/
+    echo -n $API_KEY > /var/run/conjur/api-key
+    cat /var/run/conjur/api-key
+  "
+}
+
+main

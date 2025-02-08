@@ -1,13 +1,30 @@
 version: '3.8'
 
 services:
+  openssl:
+    image: cyberark/conjur
+    container_name: openssl
+    entrypoint:
+      - create-certs.sh
+    volumes:
+     - ./create-certs.sh/:/usr/local/bin/create-certs.sh
+     - ./conf/tls/:/tmp/conf
+
   secrets-provider:
     image: golang:1.23
     working_dir: /app
     environment:
-      CONJUR_AUTHN_URL: authn
+      # CONJUR_AUTHN_URL: authn
+      CONJUR_AUTHN_URL: https://proxy/authn
+      CONJUR_APPLIANCE_URL: https://proxy
+      CONJUR_ACCOUNT: cucumber
+      CONJUR_SSL_CERTIFICATE_PATH: /etc/conjur/ssl/client.pem
+      CONJUR_AUTHN_LOGIN: host/test-app
+      CONJUR_LOG_LEVEL: debug
     volumes:
       - ../:/app
+      - ../bin/run-time-scripts/conjur-secrets-provided.sh:/usr/local/bin/conjur-secrets-provided.sh
+      - ../bin/run-time-scripts/conjur-secrets-unchanged.sh:/usr/local/bin/conjur-secrets-unchanged.sh
     command: ["sleep", "infinity"]
 
   pg:
@@ -28,6 +45,19 @@ services:
     expose:
       - "5432"
 
+  proxy:
+    image: nginx:1.13.6-alpine
+    container_name: nginx_proxy
+    ports:
+      - "3000:443"
+    volumes:
+      - ./conf/:/etc/nginx/conf.d/:ro
+      - ./conf/tls/:/etc/nginx/tls/:ro
+    depends_on:
+    - conjur
+    - openssl
+    restart: on-failure
+
   conjur:
     image: cyberark/conjur
     command: server
@@ -47,19 +77,17 @@ services:
     cap_add:
       - SYSLOG
     ports:
-      - "3000:3000"
       - "1234:1234"
       - "12345:12345" # Debug port for rdbg
     expose:
       - "3000"
-
 
   client:
     image: cyberark/conjur-cli:8
     entrypoint: sleep
     command: infinity
     environment:
-      CONJUR_APPLIANCE_URL: http://conjur:3000
+      CONJUR_APPLIANCE_URL: https://proxy
       CONJUR_ACCOUNT: cucumber
       CONJUR_AUTHN_LOGIN: admin
     links:

@@ -16,3 +16,7 @@ build_ca_certificate/
 deploy/**/generated/
 tmp
 .vscode
+dev/**/*.crt
+dev/**/*.key
+dev/**/*.pem
+dev/data_key
