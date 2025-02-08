@@ -1,0 +1,48 @@
+#!/bin/bash
+
+main() {
+  init_data_key
+  docker compose up -d
+  docker compose exec conjur conjurctl db migrate
+  docker compose exec conjur conjurctl account create cucumber || true
+  start_conjur_server
+  # enter_container
+}
+
+init_data_key() {
+  if [ ! -f data_key ]; then
+    echo "Generating data key"
+    openssl rand -base64 32 > data_key
+  fi
+
+  export CONJUR_DATA_KEY
+  CONJUR_DATA_KEY="$(cat data_key)"
+}
+
+start_conjur_server() {
+  echo "Starting Conjur server"
+  docker compose exec -d conjur conjurctl server
+
+  echo 'Checking if Conjur server is ready'
+  wait_for_conjur
+}
+
+wait_for_conjur() {
+  api_key=$(
+    docker compose exec -T conjur \
+      conjurctl role retrieve-key cucumber:user:admin | tr -d '\r'
+  )
+
+  docker compose exec -T conjur conjurctl wait
+
+  echo "$api_key"
+  docker compose exec client conjur login --id admin --password  "$api_key"
+}
+
+# enter_container() {
+#   env_args+=(-e "CONJUR_AUTHN_API_KEY=$api_key")
+#   docker exec "${env_args[@]}" -it --detach-keys ctrl-\\ \
+#     "$(docker compose ps -q conjur)" bash
+# }
+
+main "$@"

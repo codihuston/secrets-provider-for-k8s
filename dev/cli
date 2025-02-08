@@ -1,0 +1,22 @@
+#!/bin/bash -ex
+
+main() {  
+  cmd="$@"
+
+  api_key=$(
+    docker compose exec -T conjur \
+      conjurctl role retrieve-key cucumber:user:admin | tr -d '\r'
+  )
+
+  echo $api_key
+
+  docker compose run --rm --entrypoint /bin/sh client -c "
+    if [ ! -e /root/conjur-server.pem ]; then
+      echo y | conjur init --insecure -u http://conjur -a cucumber --force
+    fi
+    conjur login -i admin -p $api_key
+    eval exec \"$cmd\"
+  "
+}
+
+main "$@"
