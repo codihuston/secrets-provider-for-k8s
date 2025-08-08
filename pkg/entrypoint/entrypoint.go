@@ -17,6 +17,7 @@ import (
 	secretsConfigProvider "github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/config"
 	k8sSecretsStorage "github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/k8s_secrets_storage"
 	"github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/pushtofile"
+	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -32,6 +33,13 @@ const (
 )
 
 var annotationsMap map[string]string
+
+// CLI configuration variables
+var (
+	configPath     string
+	outputDir      string
+	templatesDir   string
+)
 
 var envAnnotationsConversion = map[string]string{
 	"CONJUR_AUTHN_LOGIN":     "conjur.org/authn-identity",
@@ -49,15 +57,99 @@ var envAnnotationsConversion = map[string]string{
 }
 
 func StartSecretsProvider() {
-	exitCode := startSecretsProviderWithDeps(
-		defaultAnnotationsFilePath,
-		defaultSecretsBasePath,
-		defaultTemplatesBasePath,
-		conjur.NewSecretRetriever,
-		secrets.NewProviderForType,
-		secrets.NewStatusUpdater,
-	)
-	os.Exit(exitCode)
+	var rootCmd = &cobra.Command{
+		Use:   "secrets-provider",
+		Short: "Kubernetes Secrets Provider for Conjur",
+		Long:  "A Kubernetes Secrets Provider that retrieves secrets from Conjur and stores them in various formats. NOTE: Usage outside of Kubernetes is experimental!",
+		Run: func(cmd *cobra.Command, args []string) {
+			// Use flag values or defaults
+			annotationsFilePath := configPath
+			if annotationsFilePath == "" {
+				annotationsFilePath = defaultAnnotationsFilePath
+			}
+			
+			secretsBasePath := outputDir
+			if secretsBasePath == "" {
+				secretsBasePath = defaultSecretsBasePath
+			}
+			
+			templatesBasePath := templatesDir
+			if templatesBasePath == "" {
+				templatesBasePath = defaultTemplatesBasePath
+			}
+
+			// Validate paths
+			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath); err != nil {
+				fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
+				os.Exit(1)
+			}
+
+			exitCode := startSecretsProviderWithDeps(
+				annotationsFilePath,
+				secretsBasePath,
+				templatesBasePath,
+				conjur.NewSecretRetriever,
+				secrets.NewProviderForType,
+				secrets.NewStatusUpdater,
+			)
+			os.Exit(exitCode)
+		},
+	}
+
+	// Add flags
+	rootCmd.Flags().StringVar(&configPath, "config", "", fmt.Sprintf("Path to annotations file (default: %s)", defaultAnnotationsFilePath))
+	rootCmd.Flags().StringVar(&outputDir, "output-dir", "", fmt.Sprintf("Output directory for secrets (default: %s)", defaultSecretsBasePath))
+	rootCmd.Flags().StringVar(&templatesDir, "templates-dir", "", fmt.Sprintf("Templates directory (default: %s)", defaultTemplatesBasePath))
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath string) error {
+	// Validate config file exists if a custom path is provided
+	if configPath != "" {
+		if _, err := os.Stat(annotationsFilePath); os.IsNotExist(err) {
+			return fmt.Errorf("config file does not exist: %s", annotationsFilePath)
+		} else if err != nil {
+			return fmt.Errorf("error accessing config file %s: %v", annotationsFilePath, err)
+		}
+	}
+
+	// Validate output directory exists or can be created
+	if outputDir != "" {
+		if err := ensureDirectoryExists(secretsBasePath); err != nil {
+			return fmt.Errorf("output directory validation failed for %s: %v", secretsBasePath, err)
+		}
+	}
+
+	// Validate templates directory exists or can be created
+	if templatesDir != "" {
+		if err := ensureDirectoryExists(templatesBasePath); err != nil {
+			return fmt.Errorf("templates directory validation failed for %s: %v", templatesBasePath, err)
+		}
+	}
+
+	return nil
+}
+
+func ensureDirectoryExists(dirPath string) error {
+	// Check if directory exists
+	if stat, err := os.Stat(dirPath); err == nil {
+		if !stat.IsDir() {
+			return fmt.Errorf("path exists but is not a directory: %s", dirPath)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("error accessing directory: %v", err)
+	}
+
+	// Directory doesn't exist, try to create it
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	return nil
 }
 
 func startSecretsProviderWithDeps(
@@ -76,6 +168,9 @@ func startSecretsProviderWithDeps(
 	}
 
 	log.Info(messages.CSPFK008I, secrets.FullVersionName)
+	log.Info(messages.CSPFK023I, annotationsFilePath)
+	log.Info(messages.CSPFK024I, secretsBasePath)
+	log.Info(messages.CSPFK025I, templatesBasePath)
 
 	// Create a TracerProvider, Tracer, and top-level (parent) Span
 	tracerType, tracerURL := getTracerConfig(annotationsFilePath)
