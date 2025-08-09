@@ -39,6 +39,7 @@ var (
 	configPath     string
 	outputDir      string
 	templatesDir   string
+	apiKeyFile     string
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -79,7 +80,7 @@ func StartSecretsProvider() {
 			}
 
 			// Validate paths
-			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath); err != nil {
+			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile); err != nil {
 				fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
 				os.Exit(1)
 			}
@@ -100,19 +101,34 @@ func StartSecretsProvider() {
 	rootCmd.Flags().StringVar(&configPath, "config", "", fmt.Sprintf("Path to annotations file (default: %s)", defaultAnnotationsFilePath))
 	rootCmd.Flags().StringVar(&outputDir, "output-dir", "", fmt.Sprintf("Output directory for secrets (default: %s)", defaultSecretsBasePath))
 	rootCmd.Flags().StringVar(&templatesDir, "templates-dir", "", fmt.Sprintf("Templates directory (default: %s)", defaultTemplatesBasePath))
+	rootCmd.Flags().StringVar(&apiKeyFile, "api-key-file", "", "Path to API key file for Conjur authentication")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath string) error {
+func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile string) error {
 	// Validate config file exists if a custom path is provided
 	if configPath != "" {
 		if _, err := os.Stat(annotationsFilePath); os.IsNotExist(err) {
 			return fmt.Errorf("config file does not exist: %s", annotationsFilePath)
 		} else if err != nil {
 			return fmt.Errorf("error accessing config file %s: %v", annotationsFilePath, err)
+		}
+	}
+
+	// Validate API key file exists and is readable if provided
+	if apiKeyFile != "" {
+		if _, err := os.Stat(apiKeyFile); os.IsNotExist(err) {
+			return fmt.Errorf("API key file does not exist: %s", apiKeyFile)
+		} else if err != nil {
+			return fmt.Errorf("error accessing API key file %s: %v", apiKeyFile, err)
+		}
+		
+		// Test if file is readable
+		if _, err := os.ReadFile(apiKeyFile); err != nil {
+			return fmt.Errorf("API key file is not readable %s: %v", apiKeyFile, err)
 		}
 	}
 
@@ -344,6 +360,20 @@ func secretsProvider(
 }
 
 func customEnv(key string) string {
+	// Handle special case for API key file
+	if key == "CONJUR_AUTHN_API_KEY_FILE" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		if apiKeyFile != "" {
+			log.Info(messages.CSPFK014I, key, "api-key-file flag")
+			return apiKeyFile
+		}
+	}
+	
 	if annotation, ok := envAnnotationsConversion[key]; ok {
 		if value := annotationsMap[annotation]; value != "" {
 			log.Info(messages.CSPFK014I, key, fmt.Sprintf("annotation %s", annotation))
