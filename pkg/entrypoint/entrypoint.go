@@ -40,6 +40,8 @@ var (
 	outputDir      string
 	templatesDir   string
 	apiKeyFile     string
+	spireSocket    string
+	useSpire       bool
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -80,7 +82,7 @@ func StartSecretsProvider() {
 			}
 
 			// Validate paths
-			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile); err != nil {
+			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket); err != nil {
 				fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
 				os.Exit(1)
 			}
@@ -102,13 +104,15 @@ func StartSecretsProvider() {
 	rootCmd.Flags().StringVar(&outputDir, "output-dir", "", fmt.Sprintf("Output directory for secrets (default: %s)", defaultSecretsBasePath))
 	rootCmd.Flags().StringVar(&templatesDir, "templates-dir", "", fmt.Sprintf("Templates directory (default: %s)", defaultTemplatesBasePath))
 	rootCmd.Flags().StringVar(&apiKeyFile, "api-key-file", "", "Path to API key file for Conjur authentication")
+	rootCmd.Flags().StringVar(&spireSocket, "spire-socket", "", "Path to SPIRE agent socket")
+	rootCmd.Flags().BoolVar(&useSpire, "use-spire", false, "Enable SPIRE JWT authentication")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile string) error {
+func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket string) error {
 	// Validate config file exists if a custom path is provided
 	if configPath != "" {
 		if _, err := os.Stat(annotationsFilePath); os.IsNotExist(err) {
@@ -129,6 +133,15 @@ func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiK
 		// Test if file is readable
 		if _, err := os.ReadFile(apiKeyFile); err != nil {
 			return fmt.Errorf("API key file is not readable %s: %v", apiKeyFile, err)
+		}
+	}
+
+	// Validate SPIRE socket exists if provided
+	if spireSocket != "" {
+		if _, err := os.Stat(spireSocket); os.IsNotExist(err) {
+			return fmt.Errorf("SPIRE socket does not exist: %s", spireSocket)
+		} else if err != nil {
+			return fmt.Errorf("error accessing SPIRE socket %s: %v", spireSocket, err)
 		}
 	}
 
@@ -371,6 +384,43 @@ func customEnv(key string) string {
 		if apiKeyFile != "" {
 			log.Info(messages.CSPFK014I, key, "api-key-file flag")
 			return apiKeyFile
+		}
+	}
+	
+	// Handle special case for SPIRE socket
+	if key == "SPIRE_AGENT_SOCKET_PATH" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		if spireSocket != "" {
+			log.Info(messages.CSPFK014I, key, "spire-socket flag")
+			return spireSocket
+		}
+	}
+	
+	// Handle special case for SPIRE JWT authentication
+	if key == "ENABLE_SPIRE_JWT_AUTHN" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			// Only return "true" if the env value is exactly "true", otherwise "false"
+			if envValue == "true" {
+				log.Info(messages.CSPFK014I, key, "environment")
+				return "true"
+			} else {
+				log.Info(messages.CSPFK014I, key, "environment")
+				return "false"
+			}
+		}
+		// Fall back to flag if environment variable is not set
+		if useSpire {
+			log.Info(messages.CSPFK014I, key, "use-spire flag")
+			return "true"
+		} else {
+			log.Info(messages.CSPFK014I, key, "use-spire flag")
+			return "false"
 		}
 	}
 	
