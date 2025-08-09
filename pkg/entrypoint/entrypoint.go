@@ -129,6 +129,16 @@ func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiK
 		return fmt.Errorf("--api-key and --api-key-file are mutually exclusive, please specify only one")
 	}
 
+	// Validate that CONJUR_AUTHN_API_KEY env var and --api-key-file are mutually exclusive
+	if os.Getenv("CONJUR_AUTHN_API_KEY") != "" && apiKeyFile != "" {
+		return fmt.Errorf("CONJUR_AUTHN_API_KEY environment variable and --api-key-file are mutually exclusive, please specify only one")
+	}
+
+	// Validate that CONJUR_AUTHN_API_KEY env var and --api-key-file are mutually exclusive
+	if os.Getenv("CONJUR_AUTHN_API_KEY") != "" && apiKey != "" {
+		return fmt.Errorf("CONJUR_AUTHN_API_KEY environment variable and --api-key are mutually exclusive, please specify only one")
+	}
+
 	// Validate API key file exists and is readable if provided
 	if apiKeyFile != "" {
 		if _, err := os.Stat(apiKeyFile); os.IsNotExist(err) {
