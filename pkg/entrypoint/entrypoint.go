@@ -173,7 +173,8 @@ func startSecretsProviderWithDeps(
 	log.Info(messages.CSPFK025I, templatesBasePath)
 
 	// Create a TracerProvider, Tracer, and top-level (parent) Span
-	tracerType, tracerURL := getTracerConfig(annotationsFilePath)
+	isConfigFile := configPath != ""
+	tracerType, tracerURL := getTracerConfig(annotationsFilePath, isConfigFile)
 	ctx, tracer, deferFunc, err := createTracer(tracerType, tracerURL)
 	defer deferFunc(ctx)
 	if err != nil {
@@ -182,7 +183,8 @@ func startSecretsProviderWithDeps(
 	}
 
 	// Process Pod Annotations
-	if err := processAnnotations(ctx, tracer, annotationsFilePath); err != nil {
+	log.Info("configPath: '%s', isConfigFile: %t, annotationsFilePath: '%s'", configPath, isConfigFile, annotationsFilePath)
+	if err := processAnnotations(ctx, tracer, annotationsFilePath, isConfigFile); err != nil {
 		logError(err.Error())
 		return
 	}
@@ -232,14 +234,25 @@ func startSecretsProviderWithDeps(
 	return
 }
 
-func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFilePath string) error {
+func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFilePath string, isConfigFile bool) error {
 	// Only attempt to populate from annotations if the annotations file exists
 	// TODO: Figure out strategy for dealing with explicit annotation file path
 	// set by user. In that case we can't just ignore that the file is missing.
 	if _, err := os.Stat(annotationsFilePath); err == nil {
 		_, span := tracer.Start(ctx, "Process Annotations")
 		defer span.End()
-		annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
+		
+		var err error
+		if isConfigFile {
+			// Parse as YAML config file
+			log.Info("Processing file as YAML config: %s", annotationsFilePath)
+			annotationsMap, err = annotations.NewAnnotationsFromYAMLFile(annotationsFilePath)
+		} else {
+			// Parse as Kubernetes Downward API annotations file
+			log.Info("Processing file as Downward API annotations: %s", annotationsFilePath)
+			annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
+		}
+		
 		if err != nil {
 			log.Error(err.Error())
 			span.RecordErrorAndSetStatus(err)
