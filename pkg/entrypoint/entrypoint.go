@@ -42,6 +42,7 @@ var (
 	apiKeyFile     string
 	spireSocket    string
 	useSpire       bool
+	apiKey         string
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -106,6 +107,7 @@ func StartSecretsProvider() {
 	rootCmd.Flags().StringVar(&apiKeyFile, "api-key-file", "", "Path to API key file for Conjur authentication")
 	rootCmd.Flags().StringVar(&spireSocket, "spire-socket", "", "Path to SPIRE agent socket")
 	rootCmd.Flags().BoolVar(&useSpire, "use-spire", false, "Enable SPIRE JWT authentication")
+	rootCmd.Flags().StringVar(&apiKey, "api-key", "", "API key for Conjur authentication")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -120,6 +122,11 @@ func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiK
 		} else if err != nil {
 			return fmt.Errorf("error accessing config file %s: %v", annotationsFilePath, err)
 		}
+	}
+
+	// Validate that --api-key and --api-key-file are mutually exclusive
+	if apiKey != "" && apiKeyFile != "" {
+		return fmt.Errorf("--api-key and --api-key-file are mutually exclusive, please specify only one")
 	}
 
 	// Validate API key file exists and is readable if provided
@@ -382,8 +389,27 @@ func customEnv(key string) string {
 		}
 		// Fall back to flag if environment variable is not set
 		if apiKeyFile != "" {
+			// Warn if both API key methods are provided via flags (validation should have caught this)
+			if apiKey != "" {
+				log.Warn("Both --api-key and --api-key-file flags provided, using --api-key-file")
+			}
 			log.Info(messages.CSPFK014I, key, "api-key-file flag")
 			return apiKeyFile
+		}
+	}
+	
+	// Handle special case for API key
+	if key == "CONJUR_AUTHN_API_KEY" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		// Only use --api-key flag if --api-key-file is not set (mutual exclusivity)
+		if apiKey != "" && apiKeyFile == "" {
+			log.Info(messages.CSPFK014I, key, "api-key flag")
+			return apiKey
 		}
 	}
 	
