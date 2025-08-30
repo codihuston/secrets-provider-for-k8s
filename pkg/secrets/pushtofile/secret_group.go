@@ -394,7 +394,10 @@ func newSecretGroup(groupName string, annotations map[string]string, c Config) (
 func collectTemplate(groupName string, annotations map[string]string, c Config) (string, error) {
 	annotationTemplate := annotations[secretGroupFileTemplatePrefix+groupName]
 
-	configmapTemplate, err := readTemplateFromFile(groupName, annotations, c)
+	// Check for custom template file path in annotation
+	customTemplatePath := annotations[secretGroupFilePathPrefix+groupName]
+
+	configmapTemplate, err := readTemplateFromFile(groupName, customTemplatePath, c)
 	if os.IsNotExist(err) {
 		return annotationTemplate, nil
 	} else if err != nil {
@@ -412,13 +415,18 @@ func collectTemplate(groupName string, annotations map[string]string, c Config) 
 	return configmapTemplate, nil
 }
 
+// Update to accept customTemplatePath
 func readTemplateFromFile(
 	groupName string,
-	annotations map[string]string,
+	customTemplatePath string,
 	c Config,
-
 ) (string, error) {
-	templateFilepath := filepath.Join(c.templatesBasePath, groupName+".tpl")
+	var templateFilepath string
+	if customTemplatePath != "" {
+		templateFilepath = customTemplatePath
+	} else {
+		templateFilepath = filepath.Join(c.templatesBasePath, groupName+".tpl")
+	}
 	rc, err := c.openReadCloser(templateFilepath)
 	if err != nil {
 		return "", err
