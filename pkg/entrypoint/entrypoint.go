@@ -36,15 +36,15 @@ var annotationsMap map[string]string
 
 // CLI configuration variables
 var (
-	configPath     string
-	outputDir      string
-	templatesDir   string
-	apiKeyFile     string
-	spireSocket    string
-	useSpire       bool
-	apiKey         string
-	jwtFile        string
-	jwt            string
+	configPath   string
+	outputDir    string
+	templatesDir string
+	apiKeyFile   string
+	spireSocket  string
+	useSpire     bool
+	apiKey       string
+	jwtFile      string
+	jwt          string
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -74,12 +74,12 @@ func StartSecretsProvider() {
 			if annotationsFilePath == "" {
 				annotationsFilePath = defaultAnnotationsFilePath
 			}
-			
+
 			secretsBasePath := outputDir
 			if secretsBasePath == "" {
 				secretsBasePath = defaultSecretsBasePath
 			}
-			
+
 			templatesBasePath := templatesDir
 			if templatesBasePath == "" {
 				templatesBasePath = defaultTemplatesBasePath
@@ -151,7 +151,7 @@ func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiK
 		} else if err != nil {
 			return fmt.Errorf("error accessing API key file %s: %v", apiKeyFile, err)
 		}
-		
+
 		// Test if file is readable
 		if _, err := os.ReadFile(apiKeyFile); err != nil {
 			return fmt.Errorf("API key file is not readable %s: %v", apiKeyFile, err)
@@ -165,7 +165,7 @@ func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiK
 		} else if err != nil {
 			return fmt.Errorf("error accessing JWT file %s: %v", jwtFile, err)
 		}
-		
+
 		// Test if file is readable
 		if _, err := os.ReadFile(jwtFile); err != nil {
 			return fmt.Errorf("JWT file is not readable %s: %v", jwtFile, err)
@@ -306,7 +306,7 @@ func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFil
 	if _, err := os.Stat(annotationsFilePath); err == nil {
 		_, span := tracer.Start(ctx, "Process Annotations")
 		defer span.End()
-		
+
 		var err error
 		if isConfigFile {
 			// Parse as YAML config file
@@ -317,7 +317,7 @@ func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFil
 			log.Info("Processing file as Downward API annotations: %s", annotationsFilePath)
 			annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
 		}
-		
+
 		if err != nil {
 			log.Error(err.Error())
 			span.RecordErrorAndSetStatus(err)
@@ -426,7 +426,7 @@ func customEnv(key string) string {
 			return apiKeyFile
 		}
 	}
-	
+
 	// Handle special case for API key
 	if key == "CONJUR_AUTHN_API_KEY" {
 		// Check environment variable first
@@ -441,7 +441,7 @@ func customEnv(key string) string {
 			return apiKey
 		}
 	}
-	
+
 	// Handle special case for SPIRE socket
 	if key == "SPIRE_AGENT_SOCKET_PATH" {
 		// Check environment variable first
@@ -455,7 +455,7 @@ func customEnv(key string) string {
 			return spireSocket
 		}
 	}
-	
+
 	// Handle special case for SPIRE JWT authentication
 	if key == "ENABLE_SPIRE_JWT_AUTHN" {
 		// Check environment variable first
@@ -478,7 +478,7 @@ func customEnv(key string) string {
 			return "false"
 		}
 	}
-	
+
 	// Handle special case for JWT file
 	if key == "JWT_TOKEN_PATH" {
 		// Check environment variable first
@@ -496,7 +496,7 @@ func customEnv(key string) string {
 			return jwtFile
 		}
 	}
-	
+
 	// Handle special case for JWT token
 	if key == "JWT_TOKEN" {
 		// Check environment variable first
@@ -511,7 +511,7 @@ func customEnv(key string) string {
 			return jwt
 		}
 	}
-	
+
 	if annotation, ok := envAnnotationsConversion[key]; ok {
 		if value := annotationsMap[annotation]; value != "" {
 			log.Info(messages.CSPFK014I, key, fmt.Sprintf("annotation %s", annotation))
