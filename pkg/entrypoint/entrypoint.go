@@ -43,6 +43,8 @@ var (
 	spireSocket    string
 	useSpire       bool
 	apiKey         string
+	jwtFile        string
+	jwt            string
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -57,6 +59,7 @@ var envAnnotationsConversion = map[string]string{
 	"JAEGER_COLLECTOR_URL":   "conjur.org/jaeger-collector-url",
 	"LOG_TRACES":             "conjur.org/log-traces",
 	"JWT_TOKEN_PATH":         "conjur.org/jwt-token-path",
+	"JWT_TOKEN":              "conjur.org/jwt-token",
 	"REMOVE_DELETED_SECRETS": "conjur.org/remove-deleted-secrets-enabled",
 }
 
@@ -83,7 +86,7 @@ func StartSecretsProvider() {
 			}
 
 			// Validate paths
-			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket); err != nil {
+			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket, jwtFile); err != nil {
 				fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
 				os.Exit(1)
 			}
@@ -108,13 +111,15 @@ func StartSecretsProvider() {
 	rootCmd.Flags().StringVar(&spireSocket, "spire-socket", "", "Path to SPIRE agent socket")
 	rootCmd.Flags().BoolVar(&useSpire, "use-spire", false, "Enable SPIRE JWT authentication")
 	rootCmd.Flags().StringVar(&apiKey, "api-key", "", "API key for Conjur authentication")
+	rootCmd.Flags().StringVar(&jwtFile, "jwt-file", "", "Path to JWT token file for Conjur authentication")
+	rootCmd.Flags().StringVar(&jwt, "jwt", "", "JWT token for Conjur authentication")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket string) error {
+func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket, jwtFile string) error {
 	// Validate config file exists if a custom path is provided
 	if configPath != "" {
 		if _, err := os.Stat(annotationsFilePath); os.IsNotExist(err) {
@@ -150,6 +155,20 @@ func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiK
 		// Test if file is readable
 		if _, err := os.ReadFile(apiKeyFile); err != nil {
 			return fmt.Errorf("API key file is not readable %s: %v", apiKeyFile, err)
+		}
+	}
+
+	// Validate JWT file exists and is readable if provided
+	if jwtFile != "" {
+		if _, err := os.Stat(jwtFile); os.IsNotExist(err) {
+			return fmt.Errorf("JWT file does not exist: %s", jwtFile)
+		} else if err != nil {
+			return fmt.Errorf("error accessing JWT file %s: %v", jwtFile, err)
+		}
+		
+		// Test if file is readable
+		if _, err := os.ReadFile(jwtFile); err != nil {
+			return fmt.Errorf("JWT file is not readable %s: %v", jwtFile, err)
 		}
 	}
 
@@ -457,6 +476,39 @@ func customEnv(key string) string {
 		} else {
 			log.Info(messages.CSPFK014I, key, "use-spire flag")
 			return "false"
+		}
+	}
+	
+	// Handle special case for JWT file
+	if key == "JWT_TOKEN_PATH" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		if jwtFile != "" {
+			// Warn if both JWT methods are provided via flags (validation should have caught this)
+			if jwt != "" {
+				log.Warn("Both --jwt and --jwt-file flags provided, using --jwt-file")
+			}
+			log.Info(messages.CSPFK014I, key, "jwt-file flag")
+			return jwtFile
+		}
+	}
+	
+	// Handle special case for JWT token
+	if key == "JWT_TOKEN" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		// Only use --jwt flag if --jwt-file is not set (mutual exclusivity)
+		if jwt != "" && jwtFile == "" {
+			log.Info(messages.CSPFK014I, key, "jwt flag")
+			return jwt
 		}
 	}
 	
