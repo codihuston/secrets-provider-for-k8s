@@ -170,11 +170,6 @@ func ValidateSecretsProviderSettings(envAndAnnots map[string]string) ([]error, [
 	var errorList []error
 	var infoList []error
 
-	// PodNamespace must be configured by envVar
-	if envAndAnnots["MY_POD_NAMESPACE"] == "" {
-		errorList = append(errorList, fmt.Errorf(messages.CSPFK004E, "MY_POD_NAMESPACE"))
-	}
-
 	envStoreType := envAndAnnots["SECRETS_DESTINATION"]
 	annotStoreType := envAndAnnots[SecretsDestinationKey]
 	storeType := ""
