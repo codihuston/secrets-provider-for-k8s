@@ -46,6 +46,8 @@ var (
 	jwtFile      string
 	jwt          string
 	noStatus     bool
+	statusDir    string
+	scriptsDir   string
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -102,7 +104,7 @@ func StartSecretsProvider() {
 					if noStatus {
 						return secrets.NewNoopStatusUpdater()
 					}
-					return secrets.NewStatusUpdater()
+					return secrets.NewStatusUpdater(statusDir, scriptsDir)
 				},
 			)
 			os.Exit(exitCode)
@@ -120,6 +122,8 @@ func StartSecretsProvider() {
 	rootCmd.Flags().StringVar(&jwtFile, "jwt-file", "", "Path to JWT token file for Conjur authentication")
 	rootCmd.Flags().StringVar(&jwt, "jwt", "", "JWT token for Conjur authentication")
 	rootCmd.Flags().BoolVar(&noStatus, "no-status", false, "Disable status provider (no status files or scripts will be written)")
+	rootCmd.Flags().StringVar(&statusDir, "status-dir", "", "Directory for status files are output to (default: /conjur/status)")
+	rootCmd.Flags().StringVar(&scriptsDir, "scripts-dir", "", "Directory where status scripts live (default: /usr/local/bin)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
