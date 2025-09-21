@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
+	"syscall"
 	"time"
 
 	authnConfigProvider "github.com/cyberark/conjur-authn-k8s-client/pkg/authenticator/config"
@@ -36,18 +39,20 @@ var annotationsMap map[string]string
 
 // CLI configuration variables
 var (
-	configPath   string
-	outputDir    string
-	templatesDir string
-	apiKeyFile   string
-	spireSocket  string
-	useSpire     bool
-	apiKey       string
-	jwtFile      string
-	jwt          string
-	noStatus     bool
-	statusDir    string
-	scriptsDir   string
+	configPath       string
+	outputDir        string
+	templatesDir     string
+	apiKeyFile       string
+	spireSocket      string
+	useSpire         bool
+	apiKey           string
+	jwtFile          string
+	jwt              string
+	noStatus         bool
+	statusDir        string
+	scriptsDir       string
+	afterSecretsCmd  string
+	afterSecretsArgs []string
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -124,6 +129,8 @@ func StartSecretsProvider() {
 	rootCmd.Flags().BoolVar(&noStatus, "no-status", false, "Disable status provider (no status files or scripts will be written)")
 	rootCmd.Flags().StringVar(&statusDir, "status-dir", "", "Directory for status files are output to (default: /conjur/status)")
 	rootCmd.Flags().StringVar(&scriptsDir, "scripts-dir", "", "Directory where status scripts live (default: /usr/local/bin)")
+	rootCmd.Flags().StringVar(&afterSecretsCmd, "after-secrets-cmd", "", "Command to run after secrets are provided (e.g. --after-secrets-cmd 'echo hello world')")
+	rootCmd.Flags().StringSliceVar(&afterSecretsArgs, "after-secrets-args", nil, "Arguments to pass to the after-secrets-cmd (e.g. --after-secrets-args arg1,arg2)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -291,19 +298,35 @@ func startSecretsProviderWithDeps(
 		provideSecrets,
 	)
 
+	// Prepare after-secrets-cmd function and args
+	afterSecretsFunc := func(args ...string) error {
+		if afterSecretsCmd == "" {
+			return nil
+		}
+		fields := strings.Fields(afterSecretsCmd)
+		if len(fields) == 0 {
+			return nil
+		}
+		cmdArgs := append(fields[1:], afterSecretsArgs...)
+		cmdArgs = append(cmdArgs, args...)
+		cmd := exec.Command(fields[0], cmdArgs...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		// Detach child process so it is not killed with the parent
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		return cmd.Start()
+	}
+
 	if err = secrets.RunSecretsProvider(
 		secrets.ProviderRefreshConfig{
 			Mode:                  getContainerMode(),
 			SecretRefreshInterval: secretsConfig.SecretsRefreshInterval,
-			// Create a channel to send a quit signal to the periodic secret provider.
-			// TODO: Currently, this is just used for testing, but in the future we
-			// may want to create a SIGTERM or SIGHUP handler to catch a signal from
-			// a user / external entity, and then send an (empty struct) quit signal
-			// on this channel to trigger a graceful shut down of the Secrets Provider.
-			ProviderQuit: make(chan struct{}),
+			ProviderQuit:          make(chan struct{}),
 		},
 		provideSecrets,
 		statusUpdaterFactory(),
+		afterSecretsFunc,
+		afterSecretsArgs,
 	); err != nil {
 		logError(err.Error())
 	}

@@ -33,4 +33,4 @@ const CSPFK022I string = "CSPFK022I Storing secret with base64 content-type '%s'
 const CSPFK023I string = "CSPFK023I Loaded config file from: %s"
 const CSPFK024I string = "CSPFK024I Secrets will be output to this directory: %s"
 const CSPFK025I string = "CSPFK025I Templates will be used from this directory: %s"
-
+const CSPFK026I string = "CSPFK026I Executing after secrets hook"

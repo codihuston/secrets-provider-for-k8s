@@ -122,6 +122,9 @@ type ProviderRefreshConfig struct {
 	ProviderQuit          chan struct{}
 }
 
+// AfterSecretsFunc describes a function type for running a command after secrets are provided.
+type AfterSecretsFunc func(args ...string) error
+
 // RunSecretsProvider takes a retryable ProviderFunc, and runs it in one of three modes:
 //   - Run once and return (for init or application container modes)
 //   - Run once and sleep forever (for sidecar mode without periodic refresh)
@@ -130,6 +133,8 @@ func RunSecretsProvider(
 	config ProviderRefreshConfig,
 	provideSecrets ProviderFunc,
 	status StatusUpdater,
+	afterSecrets AfterSecretsFunc,
+	afterSecretsArgs []string,
 ) error {
 	// If status is nil, use a no-op updater
 	if status == nil {
@@ -148,6 +153,12 @@ func RunSecretsProvider(
 		// Return immediately upon error, regardless of operating mode
 		return err
 	}
+	if afterSecrets != nil {
+		log.Info(messages.CSPFK026I)
+		// NOTE: If you want the after-secrets-cmd process to be fully independent and not killed with the parent,
+		// you should start it with 'cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}' in the exec.Command logic.
+		afterSecrets(afterSecretsArgs...)
+	}
 	err = status.SetSecretsProvided()
 	if err != nil {
 		return err
@@ -164,7 +175,7 @@ func RunSecretsProvider(
 			periodicQuit:  periodicQuit,
 			periodicError: periodicError,
 		}
-		go periodicSecretProvider(provideSecrets, config, status)
+		go periodicSecretProvider(provideSecrets, config, status, afterSecrets, afterSecretsArgs)
 	default:
 		// Run once and sleep forever if in sidecar mode without
 		// periodic refresh (fall through)
@@ -200,6 +211,8 @@ func periodicSecretProvider(
 	provideSecrets ProviderFunc,
 	config periodicConfig,
 	status StatusUpdater,
+	afterSecrets AfterSecretsFunc,
+	afterSecretsArgs []string,
 ) {
 	if status == nil {
 		status = NewNoopStatusUpdater()
@@ -212,6 +225,12 @@ func periodicSecretProvider(
 			updated, err := provideSecrets()
 			if err == nil && updated {
 				err = status.SetSecretsUpdated()
+				if afterSecrets != nil {
+					log.Info(messages.CSPFK026I)
+					// NOTE: If you want the after-secrets-cmd process to be fully independent and not killed with the parent,
+					// you should start it with 'cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}' in the exec.Command logic.
+					afterSecrets(afterSecretsArgs...)
+				}
 			}
 			if err != nil {
 				config.periodicError <- err
