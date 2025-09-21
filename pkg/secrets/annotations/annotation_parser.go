@@ -84,12 +84,15 @@ func newAnnotationsFromYAMLFile(fo fileOpener, path string) (map[string]string, 
 // List and multi-line annotations are formatted as a single string in the
 // annotations file, and this format persists into the map returned by this
 // function. For example, the following annotation:
-//   conjur.org/conjur-secrets.cache: |
-//     - url
-//     - admin-password: password
-//     - admin-username: username
+//
+//	conjur.org/conjur-secrets.cache: |
+//	  - url
+//	  - admin-password: password
+//	  - admin-username: username
+//
 // Is stored in the annotations file as:
-//   conjur.org/conjur-secrets.cache="- url\n- admin-password: password\n- admin-username: username\n"
+//
+//	conjur.org/conjur-secrets.cache="- url\n- admin-password: password\n- admin-username: username\n"
 func newAnnotationsFromReader(annotationsFile io.Reader) (map[string]string, error) {
 	var lines []string
 	scanner := bufio.NewScanner(annotationsFile)
@@ -98,9 +101,9 @@ func newAnnotationsFromReader(annotationsFile io.Reader) (map[string]string, err
 	}
 
 	// Log the annotations file content for debugging
-	log.Info("Annotations file contents (expecting Downward API format):")
+	log.Debug("Annotations file contents (expecting Downward API format):")
 	for i, line := range lines {
-		log.Info("Line %d: %s", i+1, line)
+		log.Debug("Line %d: %s", i+1, line)
 	}
 
 	annotationsMap := make(map[string]string)
@@ -133,8 +136,7 @@ func newAnnotationsFromYAMLReader(yamlFile io.Reader) (map[string]string, error)
 		return nil, log.RecordedError(messages.CSPFK041E, "failed to read YAML file", err)
 	}
 
-	// Log the YAML content for debugging
-	log.Info("YAML config file contents:\n%s", string(yamlContent))
+	log.Debug("YAML config file contents:\n%s", string(yamlContent))
 
 	// Parse YAML into a generic map
 	var yamlData map[string]interface{}

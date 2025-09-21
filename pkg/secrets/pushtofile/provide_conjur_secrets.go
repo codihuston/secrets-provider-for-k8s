@@ -2,7 +2,6 @@ package pushtofile
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 
@@ -85,7 +84,7 @@ func provideWithDeps(
 	spanCtx, span := tr.Start(traceContext, "Fetch Conjur Secrets")
 	var updated bool
 	secretsByGroup, err := FetchSecretsForGroups(depFuncs.retrieveSecretsFunc, groups, spanCtx)
-	fmt.Println(err)
+
 	if err != nil {
 		// Delete secret files for variables that no longer exist or the user no longer has permissions to.
 		// In the future we'll delete only the secrets that are revoked, but for now we delete all secrets in

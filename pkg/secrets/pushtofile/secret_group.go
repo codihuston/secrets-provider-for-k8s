@@ -367,7 +367,7 @@ func newSecretGroup(groupName string, annotations map[string]string, c Config) (
 	var err error
 	var fileTemplate string
 	if fileFormat == "template" {
-		log.Info("Collecting template for group: %s", groupName)
+		log.Info(messages.CSPFK032I, groupName)
 		fileTemplate, err = collectTemplate(groupName, annotations, c)
 		if err != nil {
 			return nil, []error{err}
@@ -449,7 +449,7 @@ func readTemplateFromFile(
 ) (string, error) {
 	var templateFilepath = getTemplateFilePath(groupName, customTemplatePath, c.templatesBasePath)
 	log.Debug("Using template file path: %s", templateFilepath)
-	log.Info("Reading template for group %s from file: %s", groupName, templateFilepath)
+	log.Info(messages.CSPFK033I, groupName, templateFilepath)
 	rc, err := c.openReadCloser(templateFilepath)
 	if err != nil {
 		return "", err

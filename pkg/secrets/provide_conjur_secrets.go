@@ -55,7 +55,7 @@ func NewProviderForType(
 ) (ProviderFunc, []error) {
 	switch providerConfig.StoreType {
 	case config.K8s:
-		log.Info("Secrets will be pushed to Kubernetes Secrets")
+		log.Info(messages.CSPFK029I)
 		provider := k8sSecretsStorage.NewProvider(
 			traceContext,
 			secretsRetrieverFunc,
@@ -64,7 +64,7 @@ func NewProviderForType(
 		)
 		return provider.Provide, nil
 	case config.File:
-		log.Info("Secrets will be pushed to file")
+		log.Info(messages.CSPFK030I)
 		provider, err := pushtofile.NewProvider(
 			secretsRetrieverFunc,
 			providerConfig.CommonProviderConfig.SanitizeEnabled,

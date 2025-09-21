@@ -266,7 +266,6 @@ func startSecretsProviderWithDeps(
 	}
 
 	// Process Pod Annotations
-	log.Info("configPath: '%s', isConfigFile: %t, annotationsFilePath: '%s'", configPath, isConfigFile, annotationsFilePath)
 	if err := processAnnotations(ctx, tracer, annotationsFilePath, isConfigFile); err != nil {
 		logError(err.Error())
 		return
@@ -344,11 +343,11 @@ func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFil
 		var err error
 		if isConfigFile {
 			// Parse as YAML config file
-			log.Info("Processing file as YAML config: %s", annotationsFilePath)
+			log.Info(messages.CSPFK027I, annotationsFilePath)
 			annotationsMap, err = annotations.NewAnnotationsFromYAMLFile(annotationsFilePath)
 		} else {
 			// Parse as Kubernetes Downward API annotations file
-			log.Info("Processing file as Downward API annotations: %s", annotationsFilePath)
+			log.Info(messages.CSPFK028I, annotationsFilePath)
 			annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
 		}
 
