@@ -71,6 +71,17 @@ func NewStatusUpdater() StatusUpdater {
 	}
 }
 
+// NewNoopStatusUpdater returns a StatusUpdater that does nothing (no-op implementation).
+func NewNoopStatusUpdater() StatusUpdater {
+	return noopStatusUpdater{}
+}
+
+type noopStatusUpdater struct{}
+
+func (n noopStatusUpdater) SetSecretsProvided() error { return nil }
+func (n noopStatusUpdater) SetSecretsUpdated() error  { return nil }
+func (n noopStatusUpdater) CopyScripts() error        { return nil }
+
 // fileUpdater implements the statusUpdater interface. It records provider
 // status by creating empty sentinel files.
 type fileUpdater struct {

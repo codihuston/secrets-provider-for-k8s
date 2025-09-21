@@ -131,6 +131,10 @@ func RunSecretsProvider(
 	provideSecrets ProviderFunc,
 	status StatusUpdater,
 ) error {
+	// If status is nil, use a no-op updater
+	if status == nil {
+		status = NewNoopStatusUpdater()
+	}
 
 	var periodicQuit = make(chan struct{})
 	var periodicError = make(chan error)
@@ -197,6 +201,9 @@ func periodicSecretProvider(
 	config periodicConfig,
 	status StatusUpdater,
 ) {
+	if status == nil {
+		status = NewNoopStatusUpdater()
+	}
 	for {
 		select {
 		case <-config.periodicQuit:

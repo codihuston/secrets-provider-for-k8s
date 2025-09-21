@@ -45,6 +45,7 @@ var (
 	apiKey       string
 	jwtFile      string
 	jwt          string
+	noStatus     bool
 )
 
 var envAnnotationsConversion = map[string]string{
@@ -97,7 +98,12 @@ func StartSecretsProvider() {
 				templatesBasePath,
 				conjur.NewSecretRetriever,
 				secrets.NewProviderForType,
-				secrets.NewStatusUpdater,
+				func() secrets.StatusUpdater {
+					if noStatus {
+						return secrets.NewNoopStatusUpdater()
+					}
+					return secrets.NewStatusUpdater()
+				},
 			)
 			os.Exit(exitCode)
 		},
@@ -113,6 +119,7 @@ func StartSecretsProvider() {
 	rootCmd.Flags().StringVar(&apiKey, "api-key", "", "API key for Conjur authentication")
 	rootCmd.Flags().StringVar(&jwtFile, "jwt-file", "", "Path to JWT token file for Conjur authentication")
 	rootCmd.Flags().StringVar(&jwt, "jwt", "", "JWT token for Conjur authentication")
+	rootCmd.Flags().BoolVar(&noStatus, "no-status", false, "Disable status provider (no status files or scripts will be written)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
