@@ -17,6 +17,7 @@ type fileProvider struct {
 	secretGroups        []*SecretGroup
 	traceContext        context.Context
 	sanitizeEnabled     bool
+	p2fConfig           P2FProviderConfig // Add config to struct
 }
 
 type fileProviderDepFuncs struct {
@@ -38,18 +39,17 @@ func NewProvider(
 	sanitizeEnabled bool,
 	config P2FProviderConfig,
 ) (*fileProvider, []error) {
-
 	secretGroups, err := NewSecretGroups(config.SecretFileBasePath,
 		config.TemplateFileBasePath, config.AnnotationsMap)
 	if err != nil {
 		return nil, err
 	}
-
 	return &fileProvider{
 		retrieveSecretsFunc: retrieveSecretsFunc,
 		secretGroups:        secretGroups,
 		traceContext:        nil,
 		sanitizeEnabled:     sanitizeEnabled,
+		p2fConfig:           config, // Store config
 	}, nil
 }
 
@@ -64,6 +64,7 @@ func (p fileProvider) Provide() (bool, error) {
 			depOpenWriteCloser:  openFileAsWriteCloser,
 			depPushToWriter:     pushToWriter,
 		},
+		p.p2fConfig, // Pass config
 	)
 }
 
@@ -76,12 +77,14 @@ func provideWithDeps(
 	groups []*SecretGroup,
 	sanitizeEnabled bool,
 	depFuncs fileProviderDepFuncs,
+	p2fConfig P2FProviderConfig, // Add config param
 ) (bool, error) {
 	// Use the global TracerProvider
 	tr := trace.NewOtelTracer(otel.Tracer("secrets-provider"))
 	spanCtx, span := tr.Start(traceContext, "Fetch Conjur Secrets")
 	var updated bool
 	secretsByGroup, err := FetchSecretsForGroups(depFuncs.retrieveSecretsFunc, groups, spanCtx)
+
 	if err != nil {
 		// Delete secret files for variables that no longer exist or the user no longer has permissions to.
 		// In the future we'll delete only the secrets that are revoked, but for now we delete all secrets in
@@ -112,8 +115,10 @@ func provideWithDeps(
 			depFuncs.depOpenWriteCloser,
 			depFuncs.depPushToWriter,
 			secretsByGroup[group.Name],
+			p2fConfig, // Pass config
 		)
 		if err != nil {
+			log.Error("%s", err)
 			childSpan.RecordErrorAndSetStatus(err)
 			span.RecordErrorAndSetStatus(err)
 			return updated, err

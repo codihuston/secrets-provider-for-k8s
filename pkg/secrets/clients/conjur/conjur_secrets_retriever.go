@@ -120,8 +120,6 @@ func retrieveConjurSecrets(conjurClient ConjurClient, variableIDs []string) (map
 }
 
 func retrieveConjurSecretsAll(conjurClient ConjurClient) (map[string][]byte, error) {
-	log.Info(messages.CSPFK023I)
-
 	// Page through all secrets available to the host
 	allResourcePaths := []string{}
 	for offset := 0; ; offset += 100 {

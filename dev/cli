@@ -1,0 +1,42 @@
+#!/bin/bash -ex
+
+main() {  
+  cmd="$@"
+
+  CONJUR_DATA_KEY="$(cat data_key)"
+  export CONJUR_DATA_KEY
+
+  api_key=$(
+    docker compose exec -e CONJUR_DATA_KEY -T conjur \
+      conjurctl role retrieve-key cucumber:user:admin | tr -d '\r'
+  )
+
+  echo $api_key
+
+  docker compose run --rm --entrypoint /bin/sh client -c "
+    if [ ! -e /root/conjur-server.pem ]; then
+      echo y | conjur init --self-signed -u \$CONJUR_APPLIANCE_URL -a cucumber --force
+    fi
+    conjur login -i admin -p $api_key
+    eval exec \"$cmd\"
+  "
+
+  # TODO: rotate the host api key
+  # Rotate the host api key and place it in the secrets-provider container
+  docker compose up -d secrets-provider
+  api_key=$(
+    docker compose exec -e CONJUR_DATA_KEY -T conjur \
+      conjurctl role retrieve-key cucumber:host:test-app | tr -d '\r'
+  )
+  docker compose exec secrets-provider /bin/sh -c "
+    mkdir -p /etc/conjur/ssl/
+    echo | openssl s_client -connect proxy:443 -servername proxy 2>/dev/null | openssl x509 > /etc/conjur/ssl/client.pem
+    cat /etc/conjur/ssl/client.pem
+
+    mkdir -p /var/run/conjur/
+    echo -n $api_key > /var/run/conjur/api-key
+    cat /var/run/conjur/api-key
+  "
+}
+
+main "$@"

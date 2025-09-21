@@ -61,18 +61,26 @@ func resolvedSecretSpecs(policyPathPrefix string, secretSpecs []SecretSpec) []Se
 
 // PushToFile uses the configuration on a secret group to inject secrets into a template
 // and write the result to a file.
-func (sg *SecretGroup) PushToFile(secrets []*Secret) (bool, error) {
-	return sg.pushToFileWithDeps(openFileAsWriteCloser, pushToWriter, secrets)
+func (sg *SecretGroup) PushToFile(secrets []*Secret, config P2FProviderConfig) (bool, error) {
+	return sg.pushToFileWithDeps(openFileAsWriteCloser, pushToWriter, secrets, config)
 }
 
 func (sg *SecretGroup) pushToFileWithDeps(
 	depOpenWriteCloser openWriteCloserFunc,
 	depPushToWriter pushToWriterFunc,
 	secrets []*Secret,
+	config P2FProviderConfig, // Add config param
 ) (updated bool, err error) {
 	// Make sure all the secret specs are accounted for
 	if err = validateSecretsAgainstSpecs(secrets, sg.SecretSpecs); err != nil {
 		return false, err
+	}
+
+	// Always prefer annotation value for customTemplatePath
+	customTemplatePath := ""
+	if config.AnnotationsMap != nil {
+		annotationKey := secretGroupFilePathPrefix + sg.Name
+		customTemplatePath = config.AnnotationsMap[annotationKey]
 	}
 
 	// Determine file template from
@@ -83,6 +91,9 @@ func (sg *SecretGroup) pushToFileWithDeps(
 		sg.FileTemplate,
 		sg.FileFormat,
 		sg.SecretSpecs,
+		sg.Name,
+		customTemplatePath, // Use annotation value
+		config,
 	)
 	if err != nil {
 		return false, err
@@ -258,27 +269,40 @@ func validateSecretsAgainstSpecs(
 	return nil
 }
 
+// getTemplateFilePath centralizes template file path resolution
+func getTemplateFilePath(groupName, customTemplatePath, templatesBasePath string) string {
+	if customTemplatePath != "" && customTemplatePath != templatesBasePath {
+		return filepath.Join(templatesBasePath, customTemplatePath)
+	}
+	return filepath.Join(templatesBasePath, groupName+".tpl")
+}
+
 func maybeFileTemplateFromFormat(
 	fileTemplate string,
 	fileFormat string,
 	secretSpecs []SecretSpec,
+	groupName string,
+	customTemplatePath string,
+	config P2FProviderConfig,
 ) (string, error) {
 	// Default to "yaml" file format
 	if len(fileTemplate)+len(fileFormat) == 0 {
 		fileFormat = "yaml"
 	}
 
-	// fileFormat is used to set fileTemplate when fileTemplate is not
-	// already set
 	if len(fileTemplate) == 0 {
-		var err error
-
-		fileTemplate, err = FileTemplateForFormat(
-			fileFormat,
-			secretSpecs,
-		)
-		if err != nil {
-			return "", err
+		if fileFormat == "template" {
+			var expectedPath = getTemplateFilePath(groupName, customTemplatePath, config.TemplateFileBasePath)
+			return "", fmt.Errorf("Could not find custom template file for group '%s', expected at: %s", groupName, expectedPath)
+		} else {
+			var err error
+			fileTemplate, err = FileTemplateForFormat(
+				fileFormat,
+				secretSpecs,
+			)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -343,6 +367,7 @@ func newSecretGroup(groupName string, annotations map[string]string, c Config) (
 	var err error
 	var fileTemplate string
 	if fileFormat == "template" {
+		log.Info(messages.CSPFK032I, groupName)
 		fileTemplate, err = collectTemplate(groupName, annotations, c)
 		if err != nil {
 			return nil, []error{err}
@@ -394,8 +419,12 @@ func newSecretGroup(groupName string, annotations map[string]string, c Config) (
 func collectTemplate(groupName string, annotations map[string]string, c Config) (string, error) {
 	annotationTemplate := annotations[secretGroupFileTemplatePrefix+groupName]
 
-	configmapTemplate, err := readTemplateFromFile(groupName, annotations, c)
+	// Check for custom template file path in annotation
+	customTemplatePath := annotations[secretGroupFilePathPrefix+groupName]
+
+	configmapTemplate, err := readTemplateFromFile(groupName, customTemplatePath, c)
 	if os.IsNotExist(err) {
+		log.Warn("No template file found for secret group %q at path %q", groupName, filepath.Join(c.templatesBasePath, customTemplatePath))
 		return annotationTemplate, nil
 	} else if err != nil {
 		return "", fmt.Errorf("unable to read template file for secret group %q: %s", groupName, err)
@@ -412,13 +441,15 @@ func collectTemplate(groupName string, annotations map[string]string, c Config) 
 	return configmapTemplate, nil
 }
 
+// Update to use getTemplateFilePath in readTemplateFromFile
 func readTemplateFromFile(
 	groupName string,
-	annotations map[string]string,
+	customTemplatePath string,
 	c Config,
-
 ) (string, error) {
-	templateFilepath := filepath.Join(c.templatesBasePath, groupName+".tpl")
+	var templateFilepath = getTemplateFilePath(groupName, customTemplatePath, c.templatesBasePath)
+	log.Debug("Using template file path: %s", templateFilepath)
+	log.Info(messages.CSPFK033I, groupName, templateFilepath)
 	rc, err := c.openReadCloser(templateFilepath)
 	if err != nil {
 		return "", err

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cyberark/conjur-authn-k8s-client/pkg/log"
+	"gopkg.in/yaml.v3"
 
 	"github.com/cyberark/secrets-provider-for-k8s/pkg/log/messages"
 )
@@ -39,6 +40,19 @@ func NewAnnotationsFromFile(path string) (map[string]string, error) {
 	return res, nil
 }
 
+// NewAnnotationsFromYAMLFile reads and parses a YAML configuration file,
+// converting it to the same string-to-string map format that Kubernetes
+// Downward API annotations produce.
+func NewAnnotationsFromYAMLFile(path string) (map[string]string, error) {
+	// Use standard OS
+	res, err := newAnnotationsFromYAMLFile(osFileOpener, path)
+	if err != nil {
+		return nil, fmt.Errorf(messages.CSPFK041E, path, err)
+	}
+
+	return res, nil
+}
+
 // newAnnotationsFromFile performs the work of NewAnnotationsFromFile(), and
 // provides a function entrypoint that allows filesystem mocking for test
 // purposes.
@@ -51,6 +65,18 @@ func newAnnotationsFromFile(fo fileOpener, path string) (map[string]string, erro
 	return newAnnotationsFromReader(annotationsFile)
 }
 
+// newAnnotationsFromYAMLFile performs the work of NewAnnotationsFromYAMLFile(), and
+// provides a function entrypoint that allows filesystem mocking for test
+// purposes.
+func newAnnotationsFromYAMLFile(fo fileOpener, path string) (map[string]string, error) {
+	yamlFile, err := fo(path, os.O_RDONLY, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
+	defer yamlFile.Close()
+	return newAnnotationsFromYAMLReader(yamlFile)
+}
+
 // newAnnotationsFromReader parses an input stream representing an annotations file that
 // had been created by Kubernetes via the Downward API, returning a
 // string-to-string map of annotations key-value pairs.
@@ -58,17 +84,26 @@ func newAnnotationsFromFile(fo fileOpener, path string) (map[string]string, erro
 // List and multi-line annotations are formatted as a single string in the
 // annotations file, and this format persists into the map returned by this
 // function. For example, the following annotation:
-//   conjur.org/conjur-secrets.cache: |
-//     - url
-//     - admin-password: password
-//     - admin-username: username
+//
+//	conjur.org/conjur-secrets.cache: |
+//	  - url
+//	  - admin-password: password
+//	  - admin-username: username
+//
 // Is stored in the annotations file as:
-//   conjur.org/conjur-secrets.cache="- url\n- admin-password: password\n- admin-username: username\n"
+//
+//	conjur.org/conjur-secrets.cache="- url\n- admin-password: password\n- admin-username: username\n"
 func newAnnotationsFromReader(annotationsFile io.Reader) (map[string]string, error) {
 	var lines []string
 	scanner := bufio.NewScanner(annotationsFile)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
+	}
+
+	// Log the annotations file content for debugging
+	log.Debug("Annotations file contents (expecting Downward API format):")
+	for i, line := range lines {
+		log.Debug("Line %d: %s", i+1, line)
 	}
 
 	annotationsMap := make(map[string]string)
@@ -88,4 +123,68 @@ func newAnnotationsFromReader(annotationsFile io.Reader) (map[string]string, err
 	}
 
 	return annotationsMap, nil
+}
+
+// newAnnotationsFromYAMLReader parses a YAML configuration file and converts
+// it to the same string-to-string map format that Kubernetes Downward API
+// annotations produce. This allows using YAML config files with the same
+// structure as Pod annotations.
+func newAnnotationsFromYAMLReader(yamlFile io.Reader) (map[string]string, error) {
+	// Read the entire YAML content
+	yamlContent, err := io.ReadAll(yamlFile)
+	if err != nil {
+		return nil, log.RecordedError(messages.CSPFK041E, "failed to read YAML file", err)
+	}
+
+	log.Debug("YAML config file contents:\n%s", string(yamlContent))
+
+	// Parse YAML into a generic map
+	var yamlData map[string]interface{}
+	err = yaml.Unmarshal(yamlContent, &yamlData)
+	if err != nil {
+		return nil, log.RecordedError(messages.CSPFK041E, "failed to parse YAML", err)
+	}
+
+	// Convert to string-to-string map, mimicking Downward API format
+	annotationsMap := make(map[string]string)
+	for key, value := range yamlData {
+		// Convert value to string, handling different types
+		stringValue, err := convertYAMLValueToString(value)
+		if err != nil {
+			return nil, log.RecordedError(messages.CSPFK041E, fmt.Sprintf("failed to convert value for key %s", key), err)
+		}
+		annotationsMap[key] = stringValue
+	}
+
+	return annotationsMap, nil
+}
+
+// convertYAMLValueToString converts a YAML value to string format that matches
+// how Kubernetes Downward API formats annotation values
+func convertYAMLValueToString(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return v, nil
+	case []interface{}:
+		// Convert array to multi-line string format like Downward API
+		var lines []string
+		for _, item := range v {
+			itemStr, err := convertYAMLValueToString(item)
+			if err != nil {
+				return "", err
+			}
+			lines = append(lines, "- "+itemStr)
+		}
+		return strings.Join(lines, "\n") + "\n", nil
+	case map[string]interface{}:
+		// Convert nested map to YAML-like string format
+		yamlBytes, err := yaml.Marshal(v)
+		if err != nil {
+			return "", err
+		}
+		return string(yamlBytes), nil
+	default:
+		// Convert other types (int, bool, etc.) to string
+		return fmt.Sprintf("%v", v), nil
+	}
 }

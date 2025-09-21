@@ -1,0 +1,102 @@
+#!/bin/bash -xe
+
+main() {
+  # init_certs
+  # init_data_key
+  # start_conjur_server
+  # load_policy
+  # place_files_in_secretss_provider
+  enter_container
+}
+
+init_certs(){
+  docker compose pull
+  docker compose run --no-deps --rm openssl
+  docker compose up -d proxy
+}
+
+init_data_key() {
+  if [ ! -f data_key ]; then
+    echo "Generating data key"
+    openssl rand -base64 32 > data_key
+  fi
+
+  CONJUR_DATA_KEY="$(cat data_key)"
+  export CONJUR_DATA_KEY
+}
+
+start_conjur_server() {
+  echo "Starting Conjur server"
+  docker compose up -d pg
+  docker compose up -d conjur
+  docker compose up -d client
+  # docker compose exec conjur conjurctl db migrate
+  # docker compose exec -d conjur conjurctl server
+
+  echo 'Checking if Conjur server is ready'
+  wait_for_conjur
+}
+
+wait_for_conjur() {
+  docker compose exec -T conjur conjurctl wait
+
+  docker compose exec -e CONJUR_DATA_KEY conjur conjurctl account create cucumber || true
+  api_key=$(
+    docker compose exec -e CONJUR_DATA_KEY -T conjur \
+      conjurctl role retrieve-key cucumber:user:admin | tr -d '\r'
+  )
+  ./cli conjur login --id admin --password  "$api_key"
+}
+
+place_files_in_secretss_provider() {
+  api_key=$(
+    docker compose exec -e CONJUR_DATA_KEY -T conjur \
+      conjurctl role retrieve-key cucumber:host:test-app | tr -d '\r'
+  )
+
+  docker compose up -d secrets-provider
+  docker compose exec secrets-provider /bin/sh -c "
+    mkdir -p /etc/conjur/ssl/
+    echo | openssl s_client -connect proxy:443 -servername proxy 2>/dev/null | openssl x509 > /etc/conjur/ssl/client.pem
+    cat /etc/conjur/ssl/client.pem
+
+    mkdir -p /var/run/conjur/
+    echo -n $api_key > /var/run/conjur/api-key
+    cat /var/run/conjur/api-key
+
+    # TODO: make configurable
+    mkdir -p /conjur/podinfo/
+    echo 'conjur.org/secrets-destination=\"file\"' > /conjur/podinfo/annotations
+    echo 'conjur.org/conjur-secrets.test-app=\"*\"' >> /conjur/podinfo/annotations
+    echo 'conjur.org/container-mode=\"sidecar\"' >> /conjur/podinfo/annotations
+    echo 'conjur.org/secrets-refresh-enabled=\"true\"' >> /conjur/podinfo/annotations
+    echo 'conjur.org/secrets-refresh-interval=\"10s\"' >> /conjur/podinfo/annotations
+    echo 'conjur.org/retry-count-limit=\"100\"'  >> /conjur/podinfo/annotations
+    echo 'conjur.org/retry-interval-sec=\"10\"' >> /conjur/podinfo/annotations
+    cat /conjur/podinfo/annotations
+  "
+}
+
+load_policy() {
+  ./cli conjur policy replace -b root -f policy/host.yml
+
+  # Init variables
+  ./cli conjur variable set -i example/alpha -v $(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  ./cli conjur variable get -i example/alpha
+  ./cli conjur variable set -i example/beta -v $(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  ./cli conjur variable get -i example/beta
+}
+
+enter_container() {
+  echo "Entering secrets provider container..."
+  echo "To start the secrets provider, run: go run cmd/secrets-provider/main.go"
+
+  # TODO: MY_POD_NAMESPACE is required, can we make this optional?
+  docker compose exec -e MY_POD_NAMESPACE=none \
+    -e CONJUR_SSL_CERTIFICATE="$(cat ./conf/tls/nginx.crt)" \
+    secrets-provider bash
+}
+
+main "$@"
+
+

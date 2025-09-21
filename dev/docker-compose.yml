@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  openssl:
+    image: cyberark/conjur
+    container_name: openssl
+    entrypoint:
+      - create-certs.sh
+    volumes:
+     - ./create-certs.sh/:/usr/local/bin/create-certs.sh
+     - ./conf/tls/:/tmp/conf
+
+  secrets-provider:
+    image: golang:1.23
+    working_dir: /app
+    environment:
+      # CONJUR_AUTHN_URL: authn
+      CONJUR_AUTHN_URL: https://proxy/authn
+      CONJUR_APPLIANCE_URL: https://proxy
+      CONJUR_ACCOUNT: cucumber
+      CONJUR_SSL_CERTIFICATE_PATH: /etc/conjur/ssl/client.pem
+      CONJUR_AUTHN_LOGIN: host/test-app
+      CONJUR_LOG_LEVEL: debug
+    volumes:
+      - ../:/app
+      - ../bin/run-time-scripts/conjur-secrets-provided.sh:/usr/local/bin/conjur-secrets-provided.sh
+      - ../bin/run-time-scripts/conjur-secrets-unchanged.sh:/usr/local/bin/conjur-secrets-unchanged.sh
+    command: ["sleep", "infinity"]
+
+  pg:
+    image: postgres:15
+    environment:
+      # To avoid the following error:
+      #
+      #   Error: Database is uninitialized and superuser password is not
+      #   specified.  You must specify POSTGRES_PASSWORD for the superuser. Use
+      #   "-e POSTGRES_PASSWORD=password" to set it in "docker run".
+      #
+      #   You may also use POSTGRES_HOST_AUTH_METHOD=trust to allow all
+      #   connections without a password. This is *not* recommended. See
+      #   PostgreSQL documentation about "trust"
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    expose:
+      - "5432"
+
+  proxy:
+    image: nginx:1.13.6-alpine
+    container_name: nginx_proxy
+    ports:
+      - "3000:443"
+    volumes:
+      - ./conf/:/etc/nginx/conf.d/:ro
+      - ./conf/tls/:/etc/nginx/tls/:ro
+    depends_on:
+    - conjur
+    - openssl
+    restart: on-failure
+
+  conjur:
+    image: cyberark/conjur
+    command: server
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://postgres@pg/postgres
+      CONJUR_ADMIN_PASSWORD: ADmin123!!!!
+      CONJUR_ACCOUNT: cucumber
+      CONJUR_PASSWORD_ALICE: SEcret12!!!!
+      CONJUR_DATA_KEY:
+      RAILS_ENV:
+      CONJUR_LOG_LEVEL: debug
+      AUDIT_DATABASE_URL:
+      # TODO: Where should we be running rspec tests from, ideally?
+      # See https://github.com/DatabaseCleaner/database_cleaner#safeguards
+      # BUNDLE_GEMFILE: /src/conjur-server/Gemfile
+    cap_add:
+      - SYSLOG
+    ports:
+      - "1234:1234"
+      - "12345:12345" # Debug port for rdbg
+    expose:
+      - "3000"
+
+  client:
+    image: cyberark/conjur-cli:8
+    entrypoint: sleep
+    command: infinity
+    environment:
+      CONJUR_APPLIANCE_URL: https://proxy
+      CONJUR_ACCOUNT: cucumber
+      CONJUR_AUTHN_LOGIN: admin
+    links:
+    - conjur:conjur
+    volumes:
+    - ./policy:/policy

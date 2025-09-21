@@ -1,0 +1,30 @@
+- !host test-app
+- !policy
+  id: example
+  body:
+    - &variables
+      - !variable alpha
+      - !variable beta
+
+    - !group secrets-admins
+
+    - !group secrets-users
+
+    - !permit
+      privilege: update
+      resource: *variables
+      role: !group secrets-admins
+
+    - !permit
+      privilege: [read, execute]
+      resource: *variables
+      role: !group secrets-users
+
+    - !grant
+      role: !group secrets-users
+      member: !group secrets-admins
+- !grant
+  roles:
+    - !group example/secrets-users
+  members:
+    - !host test-app

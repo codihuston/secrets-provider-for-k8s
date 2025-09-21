@@ -8,8 +8,10 @@ import (
 )
 
 const (
-	statusFileMode = 0666
-	scriptFileMode = 0755
+	statusFileMode    = 0666
+	scriptFileMode    = 0755
+	defaultStatusDir  = "/conjur/status"
+	defaultScriptsDir = "/usr/local/bin"
 )
 
 // StatusUpdater defines an interface for recording a secret provider's
@@ -59,17 +61,34 @@ var stdOSFuncs = osFuncs{
 // implementation.
 type StatusUpdaterFactory func() StatusUpdater
 
-// NewStatusUpdater returns a new instance of the default StatusUpdater.
-func NewStatusUpdater() StatusUpdater {
+// NewStatusUpdater returns a new StatusUpdater with a custom status and scripts directory.
+func NewStatusUpdater(statusDir, scriptsDir string) StatusUpdater {
+	if statusDir == "" {
+		statusDir = defaultStatusDir
+	}
+	if scriptsDir == "" {
+		scriptsDir = defaultScriptsDir
+	}
 	return fileUpdater{
-		providedFile:  "/conjur/status/CONJUR_SECRETS_PROVIDED",
-		updatedFile:   "/conjur/status/CONJUR_SECRETS_UPDATED",
+		providedFile:  filepath.Join(statusDir, "CONJUR_SECRETS_PROVIDED"),
+		updatedFile:   filepath.Join(statusDir, "CONJUR_SECRETS_UPDATED"),
 		scripts:       []string{"conjur-secrets-unchanged.sh"},
-		scriptSrcDir:  "/usr/local/bin",
-		scriptDestDir: "/conjur/status",
+		scriptSrcDir:  scriptsDir,
+		scriptDestDir: statusDir,
 		os:            stdOSFuncs,
 	}
 }
+
+// NewNoopStatusUpdater returns a StatusUpdater that does nothing (no-op implementation).
+func NewNoopStatusUpdater() StatusUpdater {
+	return noopStatusUpdater{}
+}
+
+type noopStatusUpdater struct{}
+
+func (n noopStatusUpdater) SetSecretsProvided() error { return nil }
+func (n noopStatusUpdater) SetSecretsUpdated() error  { return nil }
+func (n noopStatusUpdater) CopyScripts() error        { return nil }
 
 // fileUpdater implements the statusUpdater interface. It records provider
 // status by creating empty sentinel files.

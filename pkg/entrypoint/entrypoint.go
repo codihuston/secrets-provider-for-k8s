@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
+	"syscall"
 	"time"
 
 	authnConfigProvider "github.com/cyberark/conjur-authn-k8s-client/pkg/authenticator/config"
@@ -17,6 +20,7 @@ import (
 	secretsConfigProvider "github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/config"
 	k8sSecretsStorage "github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/k8s_secrets_storage"
 	"github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/pushtofile"
+	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -33,6 +37,24 @@ const (
 
 var annotationsMap map[string]string
 
+// CLI configuration variables
+var (
+	configPath       string
+	outputDir        string
+	templatesDir     string
+	apiKeyFile       string
+	spireSocket      string
+	useSpire         bool
+	apiKey           string
+	jwtFile          string
+	jwt              string
+	noStatus         bool
+	statusDir        string
+	scriptsDir       string
+	afterSecretsCmd  string
+	afterSecretsArgs []string
+)
+
 var envAnnotationsConversion = map[string]string{
 	"CONJUR_AUTHN_LOGIN":     "conjur.org/authn-identity",
 	"CONTAINER_MODE":         "conjur.org/container-mode",
@@ -45,19 +67,172 @@ var envAnnotationsConversion = map[string]string{
 	"JAEGER_COLLECTOR_URL":   "conjur.org/jaeger-collector-url",
 	"LOG_TRACES":             "conjur.org/log-traces",
 	"JWT_TOKEN_PATH":         "conjur.org/jwt-token-path",
+	"JWT_TOKEN":              "conjur.org/jwt-token",
 	"REMOVE_DELETED_SECRETS": "conjur.org/remove-deleted-secrets-enabled",
 }
 
 func StartSecretsProvider() {
-	exitCode := startSecretsProviderWithDeps(
-		defaultAnnotationsFilePath,
-		defaultSecretsBasePath,
-		defaultTemplatesBasePath,
-		conjur.NewSecretRetriever,
-		secrets.NewProviderForType,
-		secrets.NewStatusUpdater,
-	)
-	os.Exit(exitCode)
+	var rootCmd = &cobra.Command{
+		Use:   "secrets-provider",
+		Short: "Kubernetes Secrets Provider for Conjur",
+		Long:  "A Kubernetes Secrets Provider that retrieves secrets from Conjur and stores them in various formats. NOTE: Usage outside of Kubernetes is experimental!",
+		Run: func(cmd *cobra.Command, args []string) {
+			// Use flag values or defaults
+			annotationsFilePath := configPath
+			if annotationsFilePath == "" {
+				annotationsFilePath = defaultAnnotationsFilePath
+			}
+
+			secretsBasePath := outputDir
+			if secretsBasePath == "" {
+				secretsBasePath = defaultSecretsBasePath
+			}
+
+			templatesBasePath := templatesDir
+			if templatesBasePath == "" {
+				templatesBasePath = defaultTemplatesBasePath
+			}
+
+			// Validate paths
+			if err := validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket, jwtFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Validation error: %v\n", err)
+				os.Exit(1)
+			}
+
+			exitCode := startSecretsProviderWithDeps(
+				annotationsFilePath,
+				secretsBasePath,
+				templatesBasePath,
+				conjur.NewSecretRetriever,
+				secrets.NewProviderForType,
+				func() secrets.StatusUpdater {
+					if noStatus {
+						return secrets.NewNoopStatusUpdater()
+					}
+					return secrets.NewStatusUpdater(statusDir, scriptsDir)
+				},
+			)
+			os.Exit(exitCode)
+		},
+	}
+
+	// Add flags
+	rootCmd.Flags().StringVar(&configPath, "config", "", fmt.Sprintf("Path to annotations file (default: %s)", defaultAnnotationsFilePath))
+	rootCmd.Flags().StringVar(&outputDir, "output-dir", "", fmt.Sprintf("Output directory for secrets (default: %s)", defaultSecretsBasePath))
+	rootCmd.Flags().StringVar(&templatesDir, "templates-dir", "", fmt.Sprintf("Templates directory (default: %s)", defaultTemplatesBasePath))
+	rootCmd.Flags().StringVar(&apiKeyFile, "api-key-file", "", "Path to API key file for Conjur authentication")
+	rootCmd.Flags().StringVar(&spireSocket, "spire-socket", "", "Path to SPIRE agent socket")
+	rootCmd.Flags().BoolVar(&useSpire, "use-spire", false, "Enable SPIRE JWT authentication")
+	rootCmd.Flags().StringVar(&apiKey, "api-key", "", "API key for Conjur authentication")
+	rootCmd.Flags().StringVar(&jwtFile, "jwt-file", "", "Path to JWT token file for Conjur authentication")
+	rootCmd.Flags().StringVar(&jwt, "jwt", "", "JWT token for Conjur authentication")
+	rootCmd.Flags().BoolVar(&noStatus, "no-status", false, "Disable status provider (no status files or scripts will be written)")
+	rootCmd.Flags().StringVar(&statusDir, "status-dir", "", "Directory for status files are output to (default: /conjur/status)")
+	rootCmd.Flags().StringVar(&scriptsDir, "scripts-dir", "", "Directory where status scripts live (default: /usr/local/bin)")
+	rootCmd.Flags().StringVar(&afterSecretsCmd, "after-secrets-cmd", "", "Command to run after secrets are provided (e.g. --after-secrets-cmd 'echo hello world')")
+	rootCmd.Flags().StringSliceVar(&afterSecretsArgs, "after-secrets-args", nil, "Arguments to pass to the after-secrets-cmd (e.g. --after-secrets-args arg1,arg2)")
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func validatePaths(annotationsFilePath, secretsBasePath, templatesBasePath, apiKeyFile, spireSocket, jwtFile string) error {
+	// Validate config file exists if a custom path is provided
+	if configPath != "" {
+		if _, err := os.Stat(annotationsFilePath); os.IsNotExist(err) {
+			return fmt.Errorf("config file does not exist: %s", annotationsFilePath)
+		} else if err != nil {
+			return fmt.Errorf("error accessing config file %s: %v", annotationsFilePath, err)
+		}
+	}
+
+	// Validate that --api-key and --api-key-file are mutually exclusive
+	if apiKey != "" && apiKeyFile != "" {
+		return fmt.Errorf("--api-key and --api-key-file are mutually exclusive, please specify only one")
+	}
+
+	// Validate that CONJUR_AUTHN_API_KEY env var and --api-key-file are mutually exclusive
+	if os.Getenv("CONJUR_AUTHN_API_KEY") != "" && apiKeyFile != "" {
+		return fmt.Errorf("CONJUR_AUTHN_API_KEY environment variable and --api-key-file are mutually exclusive, please specify only one")
+	}
+
+	// Validate that CONJUR_AUTHN_API_KEY env var and --api-key-file are mutually exclusive
+	if os.Getenv("CONJUR_AUTHN_API_KEY") != "" && apiKey != "" {
+		return fmt.Errorf("CONJUR_AUTHN_API_KEY environment variable and --api-key are mutually exclusive, please specify only one")
+	}
+
+	// Validate API key file exists and is readable if provided
+	if apiKeyFile != "" {
+		if _, err := os.Stat(apiKeyFile); os.IsNotExist(err) {
+			return fmt.Errorf("API key file does not exist: %s", apiKeyFile)
+		} else if err != nil {
+			return fmt.Errorf("error accessing API key file %s: %v", apiKeyFile, err)
+		}
+
+		// Test if file is readable
+		if _, err := os.ReadFile(apiKeyFile); err != nil {
+			return fmt.Errorf("API key file is not readable %s: %v", apiKeyFile, err)
+		}
+	}
+
+	// Validate JWT file exists and is readable if provided
+	if jwtFile != "" {
+		if _, err := os.Stat(jwtFile); os.IsNotExist(err) {
+			return fmt.Errorf("JWT file does not exist: %s", jwtFile)
+		} else if err != nil {
+			return fmt.Errorf("error accessing JWT file %s: %v", jwtFile, err)
+		}
+
+		// Test if file is readable
+		if _, err := os.ReadFile(jwtFile); err != nil {
+			return fmt.Errorf("JWT file is not readable %s: %v", jwtFile, err)
+		}
+	}
+
+	// Validate SPIRE socket exists if provided
+	if spireSocket != "" {
+		if _, err := os.Stat(spireSocket); os.IsNotExist(err) {
+			return fmt.Errorf("SPIRE socket does not exist: %s", spireSocket)
+		} else if err != nil {
+			return fmt.Errorf("error accessing SPIRE socket %s: %v", spireSocket, err)
+		}
+	}
+
+	// Validate output directory exists or can be created
+	if outputDir != "" {
+		if err := ensureDirectoryExists(secretsBasePath); err != nil {
+			return fmt.Errorf("output directory validation failed for %s: %v", secretsBasePath, err)
+		}
+	}
+
+	// Validate templates directory exists or can be created
+	if templatesDir != "" {
+		if err := ensureDirectoryExists(templatesBasePath); err != nil {
+			return fmt.Errorf("templates directory validation failed for %s: %v", templatesBasePath, err)
+		}
+	}
+
+	return nil
+}
+
+func ensureDirectoryExists(dirPath string) error {
+	// Check if directory exists
+	if stat, err := os.Stat(dirPath); err == nil {
+		if !stat.IsDir() {
+			return fmt.Errorf("path exists but is not a directory: %s", dirPath)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("error accessing directory: %v", err)
+	}
+
+	// Directory doesn't exist, try to create it
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	return nil
 }
 
 func startSecretsProviderWithDeps(
@@ -76,9 +251,13 @@ func startSecretsProviderWithDeps(
 	}
 
 	log.Info(messages.CSPFK008I, secrets.FullVersionName)
+	log.Info(messages.CSPFK023I, annotationsFilePath)
+	log.Info(messages.CSPFK024I, secretsBasePath)
+	log.Info(messages.CSPFK025I, templatesBasePath)
 
 	// Create a TracerProvider, Tracer, and top-level (parent) Span
-	tracerType, tracerURL := getTracerConfig(annotationsFilePath)
+	isConfigFile := configPath != ""
+	tracerType, tracerURL := getTracerConfig(annotationsFilePath, isConfigFile)
 	ctx, tracer, deferFunc, err := createTracer(tracerType, tracerURL)
 	defer deferFunc(ctx)
 	if err != nil {
@@ -87,7 +266,7 @@ func startSecretsProviderWithDeps(
 	}
 
 	// Process Pod Annotations
-	if err := processAnnotations(ctx, tracer, annotationsFilePath); err != nil {
+	if err := processAnnotations(ctx, tracer, annotationsFilePath, isConfigFile); err != nil {
 		logError(err.Error())
 		return
 	}
@@ -118,33 +297,60 @@ func startSecretsProviderWithDeps(
 		provideSecrets,
 	)
 
+	// Prepare after-secrets-cmd function and args
+	afterSecretsFunc := func(args ...string) error {
+		if afterSecretsCmd == "" {
+			return nil
+		}
+		fields := strings.Fields(afterSecretsCmd)
+		if len(fields) == 0 {
+			return nil
+		}
+		cmdArgs := append(fields[1:], afterSecretsArgs...)
+		cmdArgs = append(cmdArgs, args...)
+		cmd := exec.Command(fields[0], cmdArgs...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		// Detach child process so it is not killed with the parent
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		return cmd.Start()
+	}
+
 	if err = secrets.RunSecretsProvider(
 		secrets.ProviderRefreshConfig{
 			Mode:                  getContainerMode(),
 			SecretRefreshInterval: secretsConfig.SecretsRefreshInterval,
-			// Create a channel to send a quit signal to the periodic secret provider.
-			// TODO: Currently, this is just used for testing, but in the future we
-			// may want to create a SIGTERM or SIGHUP handler to catch a signal from
-			// a user / external entity, and then send an (empty struct) quit signal
-			// on this channel to trigger a graceful shut down of the Secrets Provider.
-			ProviderQuit: make(chan struct{}),
+			ProviderQuit:          make(chan struct{}),
 		},
 		provideSecrets,
 		statusUpdaterFactory(),
+		afterSecretsFunc,
+		afterSecretsArgs,
 	); err != nil {
 		logError(err.Error())
 	}
 	return
 }
 
-func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFilePath string) error {
+func processAnnotations(ctx context.Context, tracer trace.Tracer, annotationsFilePath string, isConfigFile bool) error {
 	// Only attempt to populate from annotations if the annotations file exists
 	// TODO: Figure out strategy for dealing with explicit annotation file path
 	// set by user. In that case we can't just ignore that the file is missing.
 	if _, err := os.Stat(annotationsFilePath); err == nil {
 		_, span := tracer.Start(ctx, "Process Annotations")
 		defer span.End()
-		annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
+
+		var err error
+		if isConfigFile {
+			// Parse as YAML config file
+			log.Info(messages.CSPFK027I, annotationsFilePath)
+			annotationsMap, err = annotations.NewAnnotationsFromYAMLFile(annotationsFilePath)
+		} else {
+			// Parse as Kubernetes Downward API annotations file
+			log.Info(messages.CSPFK028I, annotationsFilePath)
+			annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
+		}
+
 		if err != nil {
 			log.Error(err.Error())
 			span.RecordErrorAndSetStatus(err)
@@ -236,6 +442,109 @@ func secretsProvider(
 }
 
 func customEnv(key string) string {
+	// Handle special case for API key file
+	if key == "CONJUR_AUTHN_API_KEY_FILE" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		if apiKeyFile != "" {
+			// Warn if both API key methods are provided via flags (validation should have caught this)
+			if apiKey != "" {
+				log.Warn("Both --api-key and --api-key-file flags provided, using --api-key-file")
+			}
+			log.Info(messages.CSPFK014I, key, "api-key-file flag")
+			return apiKeyFile
+		}
+	}
+
+	// Handle special case for API key
+	if key == "CONJUR_AUTHN_API_KEY" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		// Only use --api-key flag if --api-key-file is not set (mutual exclusivity)
+		if apiKey != "" && apiKeyFile == "" {
+			log.Info(messages.CSPFK014I, key, "api-key flag")
+			return apiKey
+		}
+	}
+
+	// Handle special case for SPIRE socket
+	if key == "SPIRE_AGENT_SOCKET_PATH" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		if spireSocket != "" {
+			log.Info(messages.CSPFK014I, key, "spire-socket flag")
+			return spireSocket
+		}
+	}
+
+	// Handle special case for SPIRE JWT authentication
+	if key == "ENABLE_SPIRE_JWT_AUTHN" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			// Only return "true" if the env value is exactly "true", otherwise "false"
+			if envValue == "true" {
+				log.Info(messages.CSPFK014I, key, "environment")
+				return "true"
+			} else {
+				log.Info(messages.CSPFK014I, key, "environment")
+				return "false"
+			}
+		}
+		// Fall back to flag if environment variable is not set
+		if useSpire {
+			log.Info(messages.CSPFK014I, key, "use-spire flag")
+			return "true"
+		} else {
+			log.Info(messages.CSPFK014I, key, "use-spire flag")
+			return "false"
+		}
+	}
+
+	// Handle special case for JWT file
+	if key == "JWT_TOKEN_PATH" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		if jwtFile != "" {
+			// Warn if both JWT methods are provided via flags (validation should have caught this)
+			if jwt != "" {
+				log.Warn("Both --jwt and --jwt-file flags provided, using --jwt-file")
+			}
+			log.Info(messages.CSPFK014I, key, "jwt-file flag")
+			return jwtFile
+		}
+	}
+
+	// Handle special case for JWT token
+	if key == "JWT_TOKEN" {
+		// Check environment variable first
+		if envValue := os.Getenv(key); envValue != "" {
+			log.Info(messages.CSPFK014I, key, "environment")
+			return envValue
+		}
+		// Fall back to flag if environment variable is not set
+		// Only use --jwt flag if --jwt-file is not set (mutual exclusivity)
+		if jwt != "" && jwtFile == "" {
+			log.Info(messages.CSPFK014I, key, "jwt flag")
+			return jwt
+		}
+	}
+
 	if annotation, ok := envAnnotationsConversion[key]; ok {
 		if value := annotationsMap[annotation]; value != "" {
 			log.Info(messages.CSPFK014I, key, fmt.Sprintf("annotation %s", annotation))

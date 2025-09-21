@@ -14,3 +14,15 @@ build_ca_certificate/
 
 # Ignore generated policy files and manifests
 deploy/**/generated/
+tmp
+.vscode
+dev/**/*.crt
+dev/**/*.key
+dev/**/*.pem
+dev/data_key
+secrets-provider-agent
+secrets-provider-config.yaml
+*.tar
+api-key
+secrets-provider
+tmp

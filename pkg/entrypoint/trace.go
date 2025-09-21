@@ -9,10 +9,10 @@ import (
 	"github.com/cyberark/secrets-provider-for-k8s/pkg/secrets/annotations"
 )
 
-func getTracerConfig(annotationsFilePath string) (trace.TracerProviderType, string) {
+func getTracerConfig(annotationsFilePath string, isConfigFile bool) (trace.TracerProviderType, string) {
 	// First try to get the tracer config from annotations
 	log.Debug("Getting tracer config from annotations")
-	traceType, jaegerUrl, err := getTracerConfigFromAnnotations(annotationsFilePath)
+	traceType, jaegerUrl, err := getTracerConfigFromAnnotations(annotationsFilePath, isConfigFile)
 
 	// If no tracer is specified in annotations, get it from environment variables
 	if err != nil || traceType == trace.NoopProviderType {
@@ -35,11 +35,22 @@ func getTracerConfigFromEnv() (trace.TracerProviderType, string) {
 	return trace.NoopProviderType, ""
 }
 
-func getTracerConfigFromAnnotations(annotationsFilePath string) (trace.TracerProviderType, string, error) {
-	annotationsMap, err := annotations.NewAnnotationsFromFile(annotationsFilePath)
+func getTracerConfigFromAnnotations(annotationsFilePath string, isConfigFile bool) (trace.TracerProviderType, string, error) {
+	var annotationsMap map[string]string
+	var err error
+	
+	if isConfigFile {
+		// Parse as YAML config file
+		annotationsMap, err = annotations.NewAnnotationsFromYAMLFile(annotationsFilePath)
+	} else {
+		// Parse as Kubernetes Downward API annotations file
+		annotationsMap, err = annotations.NewAnnotationsFromFile(annotationsFilePath)
+	}
+	
 	if err != nil {
 		return trace.NoopProviderType, "", err
 	}
+	
 	var jaegerURL string = annotationsMap[envAnnotationsConversion["JAEGER_COLLECTOR_URL"]]
 	if jaegerURL != "" {
 		return trace.JaegerProviderType, jaegerURL, nil
